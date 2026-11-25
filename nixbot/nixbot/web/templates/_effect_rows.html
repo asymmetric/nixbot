@@ -8,7 +8,7 @@
   {% endif %}
   {% set pl = (e.why or "") | plain %}
   <div class="er {{ 'failed' if e.status in ('failed', 'dependency_failed') else 'pending' if e.status in ('pending', 'running') else '' }}">
-    <span>{{ status_icon(e.status) }}</span>
+    <span>{{ status_icon("unchanged" if e.unchanged else e.status) }}</span>
     <span class="nm">
       {% if e.id and (e.log_size or e.status == "running") %}
         <a href="{{ repo_path(project) }}/effects/runs/{{ e.id }}"><code>{{ e.name }}</code></a>
@@ -31,14 +31,19 @@
     {% endif %}
     <span class="t">
       {% if e.started_at %}<time datetime="{{ e.started_at.isoformat() }}" title="{{ e.started_at }}">{{ e.started_at | timeago }}</time>{% endif %}
-      {% if e.started_at and e.status not in ("skipped", "pending") %}<span class="muted">· {{ e | duration }}</span>{% endif %}
+      {% if e.started_at and e.status not in ("skipped", "pending") and not e.unchanged %}<span class="muted">· {{ e | duration }}</span>{% endif %}
     </span>
     <span class="act">
       {% if can_control and e.id and e.build_id and e.restart_allowed %}
         {{ effect_actions(build_path(project, e.build_number), e, e.kind, restart=e.restart_allowed != "cancel") }}
       {% endif %}
     </span>
-    {% if e.why %}
+    {% if e.unchanged %}
+      <div class="why">
+        unchanged since
+        <a href="{{ repo_path(project) }}/effects/runs/{{ e.reused_from }}">{{ "build #" ~ e.reused_from_build if e.reused_from_build else "run #" ~ e.reused_from }}</a>
+      </div>
+    {% elif e.why %}
       <div class="why">
         {% if e.error and (pl | length > 160 or "\n" in pl.strip()) %}
           <details class="error">

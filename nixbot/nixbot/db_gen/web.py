@@ -24,6 +24,7 @@ __all__: collections.abc.Sequence[str] = (
     "WebAttributeHistoryRow",
     "WebAttributeNeighborNumbersRow",
     "WebBuildsForRepoRow",
+    "WebEffectsRow",
     "WebEvalStatsRow",
     "WebNeighborNumbersRow",
     "WebProjectEffectCountsRow",
@@ -196,6 +197,34 @@ class EffectRunDetailRow:
     finished_at: datetime.datetime | None
     reused_from: int | None
     build_number: int | None
+    reused_from_build: int | None
+
+
+@dataclasses.dataclass()
+class WebEffectsRow:
+    id_: int
+    project_id: int
+    kind: str
+    owner: str
+    build_id: int | None
+    schedule_name: str | None
+    name: str
+    status: str
+    error: str | None
+    deps: str | None
+    log_size: int
+    log_truncated: bool
+    started_at: datetime.datetime
+    finished_at: datetime.datetime | None
+    payload: str | None
+    code_rev: str | None
+    skip_reason: str | None
+    actor: str | None
+    lock: str | None
+    changed_inputs: str | None
+    force_run: bool
+    reused_from: int | None
+    reused_from_build: int | None
 
 
 @dataclasses.dataclass()
@@ -380,6 +409,7 @@ class WebProjectEffectsRow:
     build_number: int | None
     commit_sha: str | None
     branch: str | None
+    reused_from_build: int | None
 
 
 @dataclasses.dataclass()
@@ -536,8 +566,10 @@ ORDER BY a.finished_at, a.id
 EFFECT_RUN_DETAIL: typing.Final[str] = """-- name: EffectRunDetail :one
 SELECT r.id, r.kind, r.build_id, r.schedule_name, r.name AS effect, r.status,
        r.error, r.skip_reason, r.started_at, r.finished_at, r.reused_from,
-       b.number AS build_number
+       b.number AS build_number, sb.number AS reused_from_build
 FROM effect_runs r LEFT JOIN builds b ON b.id = r.build_id
+LEFT JOIN effect_runs s ON s.id = r.reused_from
+LEFT JOIN builds sb ON sb.id = s.build_id
 WHERE r.id = $1 AND r.project_id = $2
 """
 
@@ -546,10 +578,14 @@ SELECT id FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2
 """
 
 WEB_EFFECTS: typing.Final[str] = """-- name: WebEffects :many
-SELECT id, project_id, kind, owner, build_id, schedule_name, name, status, error, deps, log_size, log_truncated, started_at, finished_at, payload, code_rev, skip_reason, actor, lock, changed_inputs, force_run, reused_from FROM effect_runs WHERE build_id = $1
+SELECT e.id, e.project_id, e.kind, e.owner, e.build_id, e.schedule_name, e.name, e.status, e.error, e.deps, e.log_size, e.log_truncated, e.started_at, e.finished_at, e.payload, e.code_rev, e.skip_reason, e.actor, e.lock, e.changed_inputs, e.force_run, e.reused_from, sb.number AS reused_from_build
+FROM effect_runs e
+LEFT JOIN effect_runs s ON s.id = e.reused_from
+LEFT JOIN builds sb ON sb.id = s.build_id
+WHERE e.build_id = $1
 ORDER BY array_position(
     ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
-    status), name
+    e.status), e.name
 """
 
 WEB_ATTRIBUTE_COUNTS: typing.Final[str] = """-- name: WebAttributeCounts :many
@@ -686,8 +722,11 @@ LIMIT $3::bigint
 """
 
 WEB_PROJECT_EFFECTS: typing.Final[str] = """-- name: WebProjectEffects :many
-SELECT e.id, e.project_id, e.kind, e.owner, e.build_id, e.schedule_name, e.name, e.status, e.error, e.deps, e.log_size, e.log_truncated, e.started_at, e.finished_at, e.payload, e.code_rev, e.skip_reason, e.actor, e.lock, e.changed_inputs, e.force_run, e.reused_from, b.number AS build_number, b.commit_sha, b.branch
+SELECT e.id, e.project_id, e.kind, e.owner, e.build_id, e.schedule_name, e.name, e.status, e.error, e.deps, e.log_size, e.log_truncated, e.started_at, e.finished_at, e.payload, e.code_rev, e.skip_reason, e.actor, e.lock, e.changed_inputs, e.force_run, e.reused_from, b.number AS build_number, b.commit_sha, b.branch,
+       sb.number AS reused_from_build
 FROM effect_runs e LEFT JOIN builds b ON b.id = e.build_id
+LEFT JOIN effect_runs s ON s.id = e.reused_from
+LEFT JOIN builds sb ON sb.id = s.build_id
 WHERE e.project_id = $1
   AND ($2::text[] IS NULL OR e.status = ANY($2))
   AND ($3::text IS NULL
@@ -995,7 +1034,7 @@ async def effect_run_detail(conn: ConnectionLike, *, id_: int, project_id: int) 
     row = await conn.fetchrow(EFFECT_RUN_DETAIL, id_, project_id)
     if row is None:
         return None
-    return EffectRunDetailRow(id_=row[0], kind=row[1], build_id=row[2], schedule_name=row[3], effect=row[4], status=row[5], error=row[6], skip_reason=row[7], started_at=row[8], finished_at=row[9], reused_from=row[10], build_number=row[11])
+    return EffectRunDetailRow(id_=row[0], kind=row[1], build_id=row[2], schedule_name=row[3], effect=row[4], status=row[5], error=row[6], skip_reason=row[7], started_at=row[8], finished_at=row[9], reused_from=row[10], build_number=row[11], reused_from_build=row[12])
 
 
 async def effect_run_id(conn: ConnectionLike, *, build_id: int | None, name: str) -> int | None:
@@ -1005,9 +1044,9 @@ async def effect_run_id(conn: ConnectionLike, *, build_id: int | None, name: str
     return row[0]
 
 
-def web_effects(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[models.EffectRun]:
-    def _decode_hook(row: asyncpg.Record) -> models.EffectRun:
-        return models.EffectRun(
+def web_effects(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[WebEffectsRow]:
+    def _decode_hook(row: asyncpg.Record) -> WebEffectsRow:
+        return WebEffectsRow(
             id_=row[0],
             project_id=row[1],
             kind=row[2],
@@ -1030,6 +1069,7 @@ def web_effects(conn: ConnectionLike, *, build_id: int | None) -> QueryResults[m
             changed_inputs=row[19],
             force_run=row[20],
             reused_from=row[21],
+            reused_from_build=row[22],
         )
 
     return QueryResults(conn, WEB_EFFECTS, _decode_hook, build_id)
@@ -1277,6 +1317,7 @@ def web_project_effects(conn: ConnectionLike, *, project_id: int, statuses: coll
             build_number=row[22],
             commit_sha=row[23],
             branch=row[24],
+            reused_from_build=row[25],
         )
 
     return QueryResults(conn, WEB_PROJECT_EFFECTS, _decode_hook, project_id, statuses, trigger, effect, schedule, before, limit_)

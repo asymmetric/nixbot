@@ -139,22 +139,30 @@ WHERE a.build_id = $1 AND a.finished_at IS NOT NULL
 ORDER BY a.finished_at, a.id;
 
 -- name: EffectRunDetail :one
--- Any kind. The build number is joined for the log page header.
+-- Any kind. The build number is joined for the log page header, and that
+-- of the reused run for one that when.changed settled without running.
 SELECT r.id, r.kind, r.build_id, r.schedule_name, r.name AS effect, r.status,
        r.error, r.skip_reason, r.started_at, r.finished_at, r.reused_from,
-       b.number AS build_number
+       b.number AS build_number, sb.number AS reused_from_build
 FROM effect_runs r LEFT JOIN builds b ON b.id = r.build_id
+LEFT JOIN effect_runs s ON s.id = r.reused_from
+LEFT JOIN builds sb ON sb.id = s.build_id
 WHERE r.id = $1 AND r.project_id = $2;
 
 -- name: EffectRunId :one
 SELECT id FROM effect_runs WHERE build_id = $1 AND kind = 'push' AND name = $2;
 
 -- name: WebEffects :many
--- Worst first.
-SELECT * FROM effect_runs WHERE build_id = $1
+-- Worst first. reused_from_build is the build of the run that when.changed
+-- reused, if any.
+SELECT e.*, sb.number AS reused_from_build
+FROM effect_runs e
+LEFT JOIN effect_runs s ON s.id = e.reused_from
+LEFT JOIN builds sb ON sb.id = s.build_id
+WHERE e.build_id = $1
 ORDER BY array_position(
     ARRAY['failed', 'dependency_failed', 'running', 'pending', 'succeeded', 'skipped'],
-    status), name;
+    e.status), e.name;
 
 -- name: WebAttributeCounts :many
 SELECT status, count(*) AS count,
@@ -278,8 +286,11 @@ LIMIT sqlc.arg(limit_)::bigint;
 -- name: WebProjectEffects :many
 -- Every effect run of a project, newest first, cursor on id. trigger is
 -- one of push, check, schedule, tag, event; NULL filters match all.
-SELECT e.*, b.number AS build_number, b.commit_sha, b.branch
+SELECT e.*, b.number AS build_number, b.commit_sha, b.branch,
+       sb.number AS reused_from_build
 FROM effect_runs e LEFT JOIN builds b ON b.id = e.build_id
+LEFT JOIN effect_runs s ON s.id = e.reused_from
+LEFT JOIN builds sb ON sb.id = s.build_id
 WHERE e.project_id = sqlc.arg(project_id)
   AND (sqlc.narg(statuses)::text[] IS NULL OR e.status = ANY(sqlc.narg(statuses)))
   AND (sqlc.narg(trigger)::text IS NULL

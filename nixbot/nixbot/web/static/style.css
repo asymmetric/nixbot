@@ -281,7 +281,8 @@ h2 .status-icon {
 	height: 1.3rem;
 	font-size: 0.8rem;
 }
-.status-icon.succeeded::before {
+.status-icon.succeeded::before,
+.status-icon.unchanged::before {
 	content: "\2713";
 }
 .status-icon.failed::before,
@@ -312,7 +313,8 @@ h2 .status-icon {
 }
 .status-icon.cancelled,
 .status-icon.skipped,
-.status-icon.skipped_local {
+.status-icon.skipped_local,
+.status-icon.unchanged {
 	border-style: dashed;
 	opacity: 0.6;
 }

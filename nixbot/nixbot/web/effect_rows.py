@@ -74,6 +74,9 @@ def _row(run: dict[str, Any], build: dict[str, Any] | None) -> dict[str, Any]:
         "trigger": label,
         "trigger_value": value,
         "why": run.get("skip_reason") or run.get("error"),
+        # Settled by when.changed without running: shown apart from runs
+        # that succeeded, with a link to the run it reused.
+        "unchanged": run.get("reused_from") is not None,
         "needs_attention": run["status"] in FAILED + WAITING,
         "group": _group(run),
     }

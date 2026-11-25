@@ -1264,6 +1264,54 @@ def test_api_effects_expose_reused_from(client: WebHarness) -> None:
     assert run["reused_from"] == source
 
 
+def test_reused_effects_render_unchanged(client: WebHarness) -> None:
+    # An effect settled by when.changed without running is not shown as
+    # succeeded, and points at the build whose run it reused.
+    ctx = client.ctx
+
+    async def setup() -> tuple[int, int]:
+        build_ids = {
+            row["number"]: row["id"]
+            for row in await ctx.pool.fetch(
+                "SELECT b.id, b.number FROM builds b JOIN projects p"
+                " ON p.id = b.project_id WHERE p.name = 'widget'"
+            )
+        }
+        source = await _insert_effect_run(
+            ctx.pool,
+            build_ids[1],
+            "reusefx",
+            "succeeded",
+            finished_at=datetime.now(UTC),
+        )
+        reused = await _insert_effect_run(ctx.pool, build_ids[2], "reusefx", "pending")
+        await ctx.pool.execute(
+            "UPDATE effect_runs SET status = 'succeeded', reused_from = $1,"
+            " started_at = now(), finished_at = now() WHERE id = $2",
+            source,
+            reused,
+        )
+        return source, reused
+
+    source, reused = client.run(setup())
+    try:
+        build = client.get("/repos/github/acme/widget/builds/2").text
+        effects = client.get("/repos/github/acme/widget/effects").text
+        run = client.get(f"/repos/github/acme/widget/effects/runs/{reused}").text
+    finally:
+        client.run(
+            ctx.pool.execute(
+                "DELETE FROM effect_runs WHERE id = ANY($1::bigint[])",
+                [reused, source],
+            )
+        )
+    link = f'<a href="/repos/github/acme/widget/effects/runs/{source}">build #1</a>'
+    for page in (build, effects, run):
+        assert 'class="status-icon unchanged"' in page
+        assert link in page
+    assert "log unavailable" not in run
+
+
 def test_build_rows_link_refs(client: WebHarness) -> None:
     # Branch builds link to the branch, PR builds to the pull request.
     page = client.get("/repos/github/acme/widget").text

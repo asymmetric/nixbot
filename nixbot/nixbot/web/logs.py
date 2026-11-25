@@ -691,9 +691,11 @@ class _LogRoutes:
                 # checkout runs before the first log byte). Poll until it
                 # appears instead of claiming the log is gone.
                 waiting = True
-            else:
+            elif run["reused_from"] is None:
                 # Terminal run whose log was pruned: placeholder, not a
-                # 404, so the history link still resolves.
+                # 404, so the history link still resolves. A run that
+                # when.changed reused never had one; the page points at
+                # the run it reused instead.
                 unavailable = True
         build = None
         if run["build_id"] is not None:

@@ -14,7 +14,7 @@
     <section class="content">
       <div class="build-header">
         <h2>
-          {{ status_icon(run.status) }}
+          {{ status_icon("unchanged" if run.reused_from else run.status) }}
           <code>{{ label }}</code>
           <small>
             {% if build %}
@@ -52,7 +52,13 @@
           follow tail
         </label>
       {% endif %}
-      {% if waiting %}
+      {% if run.reused_from and not content %}
+        <p class="muted">
+          not run: unchanged since
+          <a href="{{ repo_path(project) }}/effects/runs/{{ run.reused_from }}">{{ "build #" ~ run.reused_from_build if run.reused_from_build else "run #" ~ run.reused_from }}</a>,
+          whose run had the same <code>when.changed</code> inputs
+        </p>
+      {% elif waiting %}
         <p class="muted">waiting for the run to start…</p>
       {% elif unavailable %}
         <p class="muted">log unavailable — it was pruned or never written</p>
